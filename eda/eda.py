@@ -4,11 +4,11 @@ Exploratory Data Analysis (EDA) and Visualization
 - Saves plots to PNGs
 """
 
+import os
+import sqlite3
 import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
-import sqlite3
-import os
 
 # === Setup ===
 DB_PATH = r"C:\Users\girli\OneDrive\Desktop\ttm_research_study\database\survey_responses.db"
