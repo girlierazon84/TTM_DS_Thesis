@@ -13,13 +13,13 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 
 # === Configuration ===
-DB_PATH = r"C:\Users\girli\OneDrive\Desktop\ttm_research_study\database\survey_responses.db"
-OUTPUT_DIR = r"C:\Users\girli\OneDrive\Desktop\ttm_research_study\plots"
+DB_PATH = r"C:\Users\girli\OneDrive\Desktop\TTM_DS_Thesis\database\ttm_database.db"
+OUTPUT_DIR = r"C:\Users\girli\OneDrive\Desktop\TTM_DS_Thesis\images"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # === Load Data ===
 conn = sqlite3.connect(DB_PATH)
-df = pd.read_sql_query("SELECT * FROM survey_responses", conn)
+df = pd.read_sql_query("SELECT * FROM trichotillomania_data", conn)
 conn.close()
 
 # === Plot 1: Pulling Severity Distribution ===
