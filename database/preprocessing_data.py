@@ -1,27 +1,24 @@
 """
 preprocessing.py
 
-This script loads survey responses from a SQLite database, performs data
-cleaning and feature engineering (including encoding categorical variables
-and tagging relapse risk), and saves a preprocessed CSV for modeling and analysis.
+This script loads raw survey responses from a semicolon-separated CSV,
+performs data cleaning and feature engineering (including encoding categorical
+variables and tagging relapse risk), and writes the cleaned data directly into
+a new SQLite database table for downstream modeling and analysis.
 
 Functions:
-- load_data(db_path: str) -> pd.DataFrame
-    Load the `survey_responses` table from a SQLite database into a DataFrame.
+- load_data(csv_path: str) -> pd.DataFrame
+    Load the raw survey CSV into a DataFrame.
 
 - preprocess_data(df: pd.DataFrame) -> pd.DataFrame
     Clean the DataFrame, convert types, handle missing values, engineer
     new features, encode categorical variables, and tag relapse risk.
 
-- save_preprocessed_data(df: pd.DataFrame, output_path: str) -> None
-    Save the preprocessed DataFrame to a CSV file.
+- save_preprocessed_to_db(df: pd.DataFrame, db_path: str, table_name: str) -> None
+    Save the preprocessed DataFrame into a SQLite table (replacing if exists).
 
 Usage:
-    from preprocessing import load_data, preprocess_data, save_preprocessed_data
-
-    df = load_data(DB_PATH)
-    df_clean = preprocess_data(df)
-    save_preprocessed_data(df_clean, OUTPUT_CSV)
+    python preprocessing.py
 """
 
 import os
@@ -29,27 +26,25 @@ import sqlite3
 import pandas as pd
 
 # === Constants ===
-DB_PATH = r"C:\Users\girli\OneDrive\Desktop\TTM_DS_Thesis\database\ttm_database.db"
-OUTPUT_CSV = r"C:\Users\girli\OneDrive\Desktop\TTM_DS_Thesis\database\preprocessed_ttm_data.csv"
+RAW_CSV      = r"C:\Users\girli\OneDrive\Desktop\TTM_DS_Thesis\database\survey_responses.csv"
+DB_PATH      = r"C:\Users\girli\OneDrive\Desktop\TTM_DS_Thesis\database\ttm_database.db"
+TABLE_NAME   = "trichotillomania_data"
 
-def load_data(db_path: str) -> pd.DataFrame:
+def load_data(csv_path: str) -> pd.DataFrame:
     """
-    Load the trichotillomania_data table from a SQLite database.
+    Load raw survey data from a semicolon-separated CSV file.
 
     Parameters
     ----------
-    db_path : str
-        Path to the SQLite .db file.
+    csv_path : str
+        Path to the raw CSV file.
 
     Returns
     -------
     pd.DataFrame
-        DataFrame containing all rows from trichotillomania_data.
+        DataFrame containing the raw survey responses.
     """
-    conn = sqlite3.connect(db_path)
-    df = pd.read_sql_query("SELECT * FROM trichotillomania_data", conn)
-    conn.close()
-    return df
+    return pd.read_csv(csv_path, sep=';', encoding='utf-8', on_bad_lines='skip')
 
 def preprocess_data(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -57,62 +52,50 @@ def preprocess_data(df: pd.DataFrame) -> pd.DataFrame:
 
     Steps
     -----
-    1. Convert `timestamp` to datetime.
-    2. Drop rows with missing essential fields.
+    1. Parse `timestamp` to datetime.
+    2. Drop rows missing key fields.
     3. Compute `years_since_onset`.
-    4. Encode categorical variables:
-       - pulling_frequency → pulling_frequency_encoded
-       - pulling_awareness → awareness_level_encoded
-       - seasonal_change → seasonal_change_binary
-       - support_sought → support_sought_binary
-       - therapy_sought → therapy_sought_binary
-       - successfully_stopped → stopped_binary
-    5. Compute counts:
-       - emotional_trigger_score
-       - coping_strategies_count
-       - mental_health_condition_count
-       - activities_count
-       - seasons_affected_count
+    4. Encode categorical variables.
+    5. Compute text-derived counts.
     6. One-hot encode `gender`.
     7. Tag relapse risk.
-    8. Reset index and return.
+    8. Reset index.
 
     Parameters
     ----------
     df : pd.DataFrame
-        Raw DataFrame loaded from the database.
+        Raw survey DataFrame.
 
     Returns
     -------
     pd.DataFrame
-        Preprocessed DataFrame ready for modeling.
+        Preprocessed DataFrame ready for database storage and modeling.
     """
     df = df.copy()
 
     # 1. Timestamp → datetime
     df['timestamp'] = pd.to_datetime(df['timestamp'], errors='coerce')
 
-    # 2. Drop rows missing essential fields
-    essential_cols = ['age', 'age_of_onset', 'pulling_severity',
-                      'pulling_frequency', 'pulling_awareness']
-    df.dropna(subset=essential_cols, inplace=True)
+    # 2. Drop rows missing essentials
+    essentials = ['age','age_of_onset','pulling_severity','pulling_frequency','pulling_awareness']
+    df.dropna(subset=essentials, inplace=True)
 
     # 3. Years since onset
     df['years_since_onset'] = df['age'] - df['age_of_onset']
 
     # 4. Encode categorical variables
-    freq_map = {'Daily': 5, 'Several times a week': 4, 'Weekly': 3, 'Monthly': 2, 'Rarely': 1}
+    freq_map = {'Daily':5,'Several times a week':4,'Weekly':3,'Monthly':2,'Rarely':1}
     df['pulling_frequency_encoded'] = df['pulling_frequency'].map(freq_map).fillna(0).astype(int)
 
-    awareness_map = {'Yes': 1.0, 'Sometimes': 0.5, 'No': 0.0}
+    awareness_map = {'Yes':1.0,'Sometimes':0.5,'No':0.0}
     df['awareness_level_encoded'] = df['pulling_awareness'].map(awareness_map).fillna(0.0)
 
-    df['seasonal_change_binary']  = df['seasonal_change'].map({'Yes':1, 'No':0}).fillna(0).astype(int)
-    df['support_sought_binary']   = df['support_sought'].map({'Yes':1, 'No':0}).fillna(0).astype(int)
-    df['therapy_sought_binary']   = df['therapy_sought'].map({'Yes':1, 'No':0}).fillna(0).astype(int)
-    df['stopped_binary']          = df['successfully_stopped'].map({'Yes':1, 'No':0}).fillna(0).astype(int)
+    df['seasonal_change_binary'] = df['seasonal_change'].map({'Yes':1,'No':0}).fillna(0).astype(int)
+    df['support_sought_binary']  = df['support_sought'].map({'Yes':1,'No':0}).fillna(0).astype(int)
+    df['therapy_sought_binary']  = df['therapy_sought'].map({'Yes':1,'No':0}).fillna(0).astype(int)
+    df['stopped_binary']         = df['successfully_stopped'].map({'Yes':1,'No':0}).fillna(0).astype(int)
 
-    # 5. Compute textual counts
+    # 5. Compute text counts
     df['emotional_trigger_score']       = df['emotions_before_pulling'].fillna('').apply(lambda x: len(x.split(',')))
     df['coping_strategies_count']       = df['coping_strategies'].fillna('').apply(lambda x: len(x.split(',')))
     df['mental_health_condition_count'] = df['other_mental_conditions'].fillna('').apply(lambda x: len(x.split(',')))
@@ -124,7 +107,6 @@ def preprocess_data(df: pd.DataFrame) -> pd.DataFrame:
 
     # 7. Tag relapse risk
     def tag_risk(row):
-        """Tag the risk of relapse based on severity and awareness level."""
         if row['pulling_severity'] >= 7 and row['awareness_level_encoded'] <= 0.5:
             return 'high'
         elif row['pulling_severity'] >= 5:
@@ -137,24 +119,34 @@ def preprocess_data(df: pd.DataFrame) -> pd.DataFrame:
     df.reset_index(drop=True, inplace=True)
     return df
 
-def save_preprocessed_data(df: pd.DataFrame, output_path: str) -> None:
+def save_preprocessed_to_db(df: pd.DataFrame, db_path: str, table_name: str) -> None:
     """
-    Save the preprocessed DataFrame to a CSV file.
+    Save the preprocessed DataFrame into a SQLite database table.
 
     Parameters
     ----------
     df : pd.DataFrame
-        The preprocessed DataFrame.
-    output_path : str
-        Path to the output CSV file.
+        Preprocessed DataFrame.
+    db_path : str
+        Path to the SQLite .db file.
+    table_name : str
+        Name of the table to create/replace.
     """
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    df.to_csv(output_path, index=False)
-    print(f"✅ Preprocessed data saved to {output_path}")
+    conn = sqlite3.connect(db_path)
+    # Replace existing table
+    df.to_sql(table_name, conn, if_exists='replace', index=False)
+    conn.close()
+    print(f"✅ Table '{table_name}' written to {db_path}")
 
 if __name__ == "__main__":
-    df_raw   = load_data(DB_PATH)
+    # 1. Load raw CSV
+    df_raw = load_data(RAW_CSV)
+
+    # 2. Preprocess
     df_clean = preprocess_data(df_raw)
-    save_preprocessed_data(df_clean, OUTPUT_CSV)
-    print("✅ Data preprocessing complete.")
-# === End of preprocessing.py ===
+
+    # 3. Write cleaned data to new SQLite database
+    save_preprocessed_to_db(df_clean, DB_PATH, TABLE_NAME)
+
+    print("✅ Preprocessing complete; cleaned data saved to database.")
+# End of script
