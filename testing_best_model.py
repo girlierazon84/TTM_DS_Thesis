@@ -1,11 +1,11 @@
 """
-testing_model.py
+testing_best_model.py
 
 Load the best-trained pipeline and held-out test set, compute classification
 metrics and save a confusion matrix figure.
 
 Usage:
-    python testing_model.py
+    python testing_best_model.py
 """
 
 import os
