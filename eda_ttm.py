@@ -1,5 +1,5 @@
 """
-eda_ttmsurvey.py
+eda_ttm.py
 
 This script performs Exploratory Data Analysis (EDA) on processed Trichotillomania
 survey data stored in a SQLite database. It generates and saves rich static
