@@ -149,6 +149,7 @@ def train_and_select(X_train, y_train, X_test, y_test):
 
 
 def main():
+    """Main function to load data, train models, and save the best one."""
     print("🔍 Loading data from SQLite…")
     df = load_data(DB_PATH, TABLE_NAME)
 
