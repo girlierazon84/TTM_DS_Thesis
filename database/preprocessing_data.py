@@ -11,11 +11,9 @@ Compute and append new columns directly into your existing tables:
    - awareness_level_encoded (map Yes/Sometimes/No → 1.0/0.5/0.0)
    - relapse_risk_tag (high/moderate/low by severity+awareness)
 
-3. All *_1_yes_0_no tables:
-   - count_ones (sum of all 1-columns per row)
-
-Each table is replaced in-place in the same SQLite database.
+Each table is overwritten in-place in the same SQLite database.
 """
+
 import sqlite3
 import pandas as pd
 
@@ -69,36 +67,6 @@ def process_behaviour_patterns(conn: sqlite3.Connection):
     print(f"✅ Updated 'hair_pulling_behaviours_patterns' with awareness & relapse_risk ({len(df)} rows)")
 
 
-# ── 3. BINARY YES/NO TABLE COUNTS ────────────────────────────────────────────────
-def process_binary_tables(conn: sqlite3.Connection):
-    """
-    For every table named *_1_yes_0_no, sum the 1's per row, add it as
-    `count_ones` column, and overwrite the original table.
-    """
-    cur = conn.cursor()
-    cur.execute("""
-        SELECT name FROM sqlite_master
-         WHERE type='table' AND name LIKE '%\_1\_yes\_0\_no' ESCAPE '\\'
-    """)
-    tables = [r[0] for r in cur.fetchall()]
-
-    for tbl in tables:
-        df = pd.read_sql_query(f"SELECT * FROM {tbl}", conn)
-        if 'id' not in df.columns:
-            print(f"⚠️ Skipping '{tbl}' (no id column)")
-            continue
-
-        # identify binary columns (exclude id)
-        bin_cols = [c for c in df.columns if c != 'id']
-        # coerce to int and count 1's
-        df[bin_cols] = df[bin_cols].apply(pd.to_numeric, errors='coerce') \
-                                   .fillna(0).astype(int)
-        df['count_ones'] = df[bin_cols].sum(axis=1)
-
-        df.to_sql(tbl, conn, if_exists='replace', index=False)
-        print(f"✅ Updated '{tbl}' with count_ones ({len(df)} rows)")
-
-
 # ── MAIN ────────────────────────────────────────────────────────────────────────
 def main():
     """Function to run all preprocessing steps."""
@@ -109,8 +77,6 @@ def main():
         process_demographics(conn)
         print("🔄 Preprocessing behaviour patterns…")
         process_behaviour_patterns(conn)
-        print("🔄 Preprocessing binary YES/NO tables…")
-        process_binary_tables(conn)
     finally:
         conn.commit()
         conn.close()
@@ -118,3 +84,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+# ── END ────────────────────────────────────────────────────────────────────────§
