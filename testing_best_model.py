@@ -1,76 +1,50 @@
 #!/usr/bin/env python3
-# testing_best_model.py
-
 """
-Load the best-trained pipeline and held-out test set, compute classification
-metrics on the original label names, and save a confusion matrix figure.
+testing_best_model.py
 
-Usage:
-    python testing_best_model.py
+Load best_model.pkl and label_encoder.pkl, run on the held-out test split
+and output a classification report + confusion matrix PNG.
 """
-
 import os
 import joblib
 import pandas as pd
+import sqlite3
 import matplotlib.pyplot as plt
+from sklearn.metrics import classification_report, confusion_matrix, ConfusionMatrixDisplay
 
-from sklearn.metrics import (
-    classification_report,
-    confusion_matrix,
-    ConfusionMatrixDisplay
-)
+# Paths
+MODEL_DIR  = "models"
+BEST_MODEL = os.path.join(MODEL_DIR,"best_model.pkl")
+LABEL_ENC  = os.path.join(MODEL_DIR,"label_encoder.pkl")
+FIG_PATH   = os.path.join(MODEL_DIR,"confusion_matrix.png")
+DB_PATH    = "database/ttm_database.db"
 
-# ── Paths ────────────────────────────────────────────────────────────────────────
-MODEL_DIR       = r"C:\Users\girli\OneDrive\Desktop\TTM_DS_Thesis\models"
-BEST_MODEL_FILE = os.path.join(MODEL_DIR, "best_model.pkl")
-LABEL_ENC_FILE  = os.path.join(MODEL_DIR, "label_encoder.pkl")
-TEST_FEAT_FILE  = os.path.join(MODEL_DIR, "test_features.csv")
-TEST_TARG_FILE  = os.path.join(MODEL_DIR, "test_target.csv")
-FIG_DIR         = MODEL_DIR  # where to save confusion matrix
-os.makedirs(FIG_DIR, exist_ok=True)
-
+def load_test_split():
+    conn  = sqlite3.connect(DB_PATH)
+    demo  = pd.read_sql("SELECT * FROM demographics",conn).set_index("id")
+    beh   = pd.read_sql("SELECT * FROM hair_pulling_behaviours_patterns",conn).set_index("id")
+    conn.close()
+    df    = demo.join(beh, how="inner", on="id", validate="one_to_one")
+    df    = df.dropna(subset=["relapse_risk_tag"])
+    X     = df.select_dtypes(include=[int,float]).fillna(0)
+    y     = df["relapse_risk_tag"].astype(str)
+    le    = joblib.load(LABEL_ENC)
+    return X, le.transform(y), le
 
 def main():
-    """Test the best model on the held-out set, report metrics, and save a confusion matrix."""
-    # 1) Load model & encoder
-    pipeline = joblib.load(BEST_MODEL_FILE)
-    label_enc = joblib.load(LABEL_ENC_FILE)
-
-    # 2) Load test data
-    X_test = pd.read_csv(TEST_FEAT_FILE)
-    y_numeric = pd.read_csv(TEST_TARG_FILE)["target"].values
-
-    # 3) Predict numeric labels
-    y_pred_numeric = pipeline.predict(X_test)
-
-    # 4) Decode to original string labels
-    y_test = label_enc.inverse_transform(y_numeric)
-    y_pred = label_enc.inverse_transform(y_pred_numeric)
-
-    # 5) Classification report
-    print("\nClassification Report (decoded labels):")
-    print(classification_report(y_test, y_pred, digits=3))
-
-    # 6) Confusion matrix
-    cm = confusion_matrix(y_test, y_pred, labels=label_enc.classes_)
-    disp = ConfusionMatrixDisplay(
-        confusion_matrix=cm,
-        display_labels=label_enc.classes_
-    )
-
-    fig, ax = plt.subplots(figsize=(6, 6))
+    pipe, le = joblib.load(BEST_MODEL), joblib.load(LABEL_ENC)
+    X,y_true_numeric, le = load_test_split()
+    y_pred_numeric = pipe.predict(X)
+    y_true = le.inverse_transform(y_true_numeric)
+    y_pred = le.inverse_transform(y_pred_numeric)
+    print(classification_report(y_true, y_pred, digits=3))
+    cm = confusion_matrix(y_true, y_pred, labels=le.classes_)
+    disp = ConfusionMatrixDisplay(cm, display_labels=le.classes_)
+    fig, ax = plt.subplots(figsize=(6,6))
     disp.plot(ax=ax, cmap="Blues", colorbar=False)
-    ax.set_title("Confusion Matrix")
     plt.xticks(rotation=45)
-    plt.tight_layout()
+    fig.tight_layout(); fig.savefig(FIG_PATH, dpi=150)
+    print(f"Saved CM to {FIG_PATH}")
 
-    # 7) Save figure
-    cm_path = os.path.join(FIG_DIR, "confusion_matrix.png")
-    fig.savefig(cm_path, dpi=150)
-    plt.close(fig)
-    print(f"✅ Confusion matrix saved to {cm_path}")
-
-
-if __name__ == "__main__":
+if __name__=="__main__":
     main()
-# ── End of script ────────────────────────────────────────────────────────────────

@@ -1,198 +1,212 @@
 #!/usr/bin/env python3
-# trichmind_app.py
-
 """
-TrichMind Streamlit App
+trichmind_app.py
 
-A Streamlit application designed to help individuals manage
-trichotillomania (hair-pulling disorder) by providing insights into
-their behavior, emotional triggers, and coping strategies. The app
-uses a trained model to predict relapse risk based on user input.
+Interactive Streamlit dashboard for TrichMind:
 
-Features:
-- Relapse Risk Prediction: via sliders for severity & awareness.
-- Emotion Assistant: quick coping suggestions.
-- Coping Strategies: top strategies from your dataset.
-- Triggers & Insights: most common triggers & environments.
-- Binary Flags Summary: bar charts of Yes-counts per feature.
+- 🏠 Home: Relapse risk, daily progress, no-pull streak, top coping strategies
+- 📅 Daily Log
+- 🛠 Coping Tools
+- 📓 Journal & Progress
+- 💬 Chat
 
 Author: Girlie Razon
-Date: 2025-05-26
+Date:   2025-05-26
 """
 
 import os
+import datetime
 import sqlite3
-
 import joblib
 import pandas as pd
-import plotly.express as px
 import streamlit as st
+import seaborn as sns
 
-# ─── 1. PAGE CONFIG & LOGO ─────────────────────────────────────────────────────
-LOGO_PATH = r"C:\Users\girli\OneDrive\Desktop\TTM_DS_Thesis\assets\logo.png"
-icon = LOGO_PATH if os.path.exists(LOGO_PATH) else "🧠"
-
+# ── 1. PAGE CONFIG & GLOBAL STYLING ─────────────────────────────────────────────
+LOGO = "assets/logo.png"
+ICON = LOGO if os.path.exists(LOGO) else "🧠"
 st.set_page_config(
     page_title="TrichMind",
-    page_icon=icon,
-    layout="wide",
-    initial_sidebar_state="expanded"
+    page_icon=ICON,
+    layout="wide"
 )
 
-if os.path.exists(LOGO_PATH):
-    st.image(LOGO_PATH, width=100)
-
-st.title("🧠 TrichMind Dashboard")
-
-# ─── 2. STYLING ─────────────────────────────────────────────────────────────────
 st.markdown("""
-<style>
-  .stApp { background-color: #E0F2F1; }
-  .css-18e3th9 { padding: 1rem 2rem; }
-  .stTabs [role="tab"][aria-selected="true"] { background-color: #00695C; color: white !important; }
-  .stButton>button { background-color: #26A69A !important; color: white !important; border-radius:8px; }
-  .stButton>button:hover { background-color: #80CBC4 !important; }
-  footer { visibility: hidden; }
-</style>
+  <style>
+    /* bottom nav on mobile */
+    .main .block-container { padding-bottom: 4rem; }
+    @media (max-width: 600px) {
+      .stTabs { position: fixed; bottom: 0; left: 0; width: 100%; background: #E0F2F1; z-index: 1000; }
+      .stTabs [role="tab"] { flex: 1; text-align: center; padding: 0.5rem 0; margin: 0 !important; }
+    }
+    /* buttons */
+    .stButton>button { background-color: #26A69A; color: white; }
+    .stButton>button:hover { background-color: #80CBC4; }
+  </style>
 """, unsafe_allow_html=True)
 
-# ─── 3. LOAD MODEL & DATA ──────────────────────────────────────────────────────
+# Centered logo (responsive)
+if os.path.exists(LOGO):
+    c1, c2, c3 = st.columns([1,2,1])
+    with c2:
+        st.image(LOGO, width=200)
+
+sns.set_theme(style="whitegrid")
+
+# ── 2. LOAD MODEL & DATA ─────────────────────────────────────────────────────────
 @st.cache_resource
 def load_model_and_encoder():
-    """Load trained pipeline + label encoder."""
-    m = joblib.load("models/best_model.pkl")
-    le = joblib.load("models/label_encoder.pkl")
-    return m, le
+    model = joblib.load("models/best_model.pkl")
+    le    = joblib.load("models/label_encoder.pkl")
+    return model, le
 
 @st.cache_data(ttl=600)
-def load_all_data():
-    """
-    Load:
-      - demographics
-      - hair_pulling_behaviours_patterns
-      - all *_1_yes_0_no tables
-    Merge on `id`. Drop any 'count_ones' columns to avoid dups.
-    """
-    conn = sqlite3.connect("database/ttm_database.db", check_same_thread=False)
-
-    # demographics → add years_since_onset
+def load_data():
+    conn = sqlite3.connect("database/ttm_database.db")
     demo = pd.read_sql("SELECT * FROM demographics", conn)
+    beh  = pd.read_sql("SELECT * FROM hair_pulling_behaviours_patterns", conn)
+    conn.close()
+
+    # derived
     if {"age","age_of_onset"}.issubset(demo.columns):
         demo["years_since_onset"] = demo["age"] - demo["age_of_onset"]
-
-    # behaviour patterns → encode + relapse_risk_tag
-    beh = pd.read_sql("SELECT * FROM hair_pulling_behaviours_patterns", conn)
-    if "pulling_frequency" in beh:
-        freq_map = {"Daily":5,"Several times a week":4,"Weekly":3,"Monthly":2,"Rarely":1}
-        beh["pulling_frequency_encoded"] = beh["pulling_frequency"].map(freq_map).fillna(0).astype(int)
-    if "pulling_awareness" in beh:
-        aw_map = {"Yes":1.0,"Sometimes":0.5,"No":0.0}
+    aw_map = {"Yes":1.0,"Sometimes":0.5,"No":0.0}
+    if "pulling_awareness" in beh.columns:
         beh["awareness_level_encoded"] = beh["pulling_awareness"].map(aw_map).fillna(0.0)
-    def tag(r):
-        s, a = r.get("pulling_severity",0), r.get("awareness_level_encoded",0)
-        if s>=7 and a<=0.5: return "high"
-        if s>=5: return "moderate"
-        return "low"
-    beh["relapse_risk_tag"] = beh.apply(tag, axis=1)
+    if "last_pull_timestamp" in beh.columns:
+        beh["last_pull_ts"] = pd.to_datetime(beh["last_pull_timestamp"])
 
-    # merge
-    df = demo.merge(beh, on="id", how="outer", suffixes=("_demo","_beh"))
-
-    # binary tables
-    cur = conn.cursor()
-    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%\\_1\\_yes\\_0\\_no' ESCAPE '\\'")
-    for (tbl,) in cur.fetchall():
-        b = pd.read_sql(f"SELECT * FROM {tbl}", conn)
-        if "count_ones" in b.columns:
-            b = b.drop(columns=["count_ones"])
-        df = df.merge(b, on="id", how="left")
-
-    conn.close()
+    df = (
+        demo.set_index("id")
+            .join(beh.set_index("id"), how="inner", validate="one_to_one")
+            .reset_index()
+    )
     return df
 
 model, label_enc = load_model_and_encoder()
-df = load_all_data()
+df               = load_data()
 
-# ─── 4. APP TABS ───────────────────────────────────────────────────────────────
-tab1, tab2, tab3, tab4 = st.tabs([
-    "🏠 Home", "😊 Emotion Assistant", "📊 Triggers & Insights", "✅ Binary Flags"
+# ── 3. NAV TABS ─────────────────────────────────────────────────────────────────
+tabs = st.tabs([
+    "🏠 Home",
+    "📅 Daily Log",
+    "🛠 Coping Tools",
+    "📓 Journal & Progress",
+    "💬 Chat"
 ])
 
-# ─── HOME TAB ─────────────────────────────────────────────────────────────────
-with tab1:
-    st.subheader("Predict Your Relapse Risk")
-    sev = st.slider("Pulling Severity (1–10)", 1, 10, 5)
-    aw  = st.select_slider("Awareness Level", options=["No","Sometimes","Yes"], value="Sometimes")
-    aw_num = {"No":0.0,"Sometimes":0.5,"Yes":1.0}[aw]
+# ─── HOME ───────────────────────────────────────────────────────────────────────
+with tabs[0]:
+    st.subheader("Relapse Risk")
+    latest = df.sort_values("id").iloc[-1]
+    feat_cols = [
+        "age","age_of_onset","years_since_onset",
+        "pulling_severity","awareness_level_encoded"
+    ]
+    Xl = pd.DataFrame([latest[feat_cols]])
+    risk = label_enc.inverse_transform(model.predict(Xl))[0].upper()
+    colors = {"LOW":"#A5D6A7","MODERATE":"#FFF59D","HIGH":"#EF9A9A"}
 
-    if st.button("Predict Risk"):
-        Xinp = pd.DataFrame([{"pulling_severity":sev, "awareness_level_encoded":aw_num}])
-        pred = label_enc.inverse_transform(model.predict(Xinp))[0]
-        st.metric("Estimated Risk Level", pred.title())
+    st.markdown(f"""
+      <div style="background:{colors[risk]};padding:1.2rem;border-radius:10px;text-align:center;">
+        <h2 style="margin:0;font-size:2rem;">{risk}</h2>
+        <small>As of today</small>
+      </div>
+    """, unsafe_allow_html=True)
 
-    st.markdown("---")
-    st.subheader("Popular Coping Strategies")
-    if "effective_coping_strategies" in df:
-        top = (
-            df["effective_coping_strategies"].dropna()
-              .str.split(",",expand=True).stack().str.strip()
-              .value_counts().head(5)
-        )
-        st.table(top.rename_axis("Strategy").reset_index(name="Count"))
+    st.subheader("Daily Progress")
+    # count of entries *today*
+    today_mask = (pd.to_datetime(latest.get("timestamp", datetime.datetime.now()))).date() == datetime.datetime.today().date()
+    # fallback: just show total count
+    count = df[df["id"] == latest["id"]].shape[0]
+    st.metric("Entries recorded", count)
 
-# ─── EMOTION ASSISTANT TAB ─────────────────────────────────────────────────────
-with tab2:
-    st.subheader("Emotion Assistant")
-    feeling = st.text_input("How are you feeling?", "")
-    if st.button("Get Suggestions"):
-        txt = feeling.lower()
-        if any(k in txt for k in ("stress","anx")):
-            sugg = ["Deep breathing","Short walk","Meditation"]
-        elif "sad" in txt:
-            sugg = ["Uplifting music","Write in journal"]
-        else:
-            sugg = ["Take a break","Talk to a friend"]
-        for s in sugg: st.markdown(f"- {s}")
+    if "last_pull_ts" in df.columns:
+        last_ts = df.loc[df["id"]==latest["id"], "last_pull_ts"].iloc[0]
+        delta   = datetime.datetime.now() - last_ts
+        hrs     = int(delta.total_seconds() // 3600)
+        days    = delta.days
+        st.subheader("No-Pull Streak")
+        st.write(f"⏱️ {hrs} hours ({days} days) since your last pull.")
 
-# ─── TRIGGERS & ENVIRONMENTS TAB ───────────────────────────────────────────────
-with tab3:
-    st.subheader("Top 10 Emotional Triggers")
-    if "pulling_triggers" in df:
-        counts = (
-            df["pulling_triggers"].dropna()
-              .str.split(",",expand=True).stack().str.strip()
-              .value_counts().head(10)
-        )
-        fig = px.bar(counts, title="Top 10 Triggers",
-                     labels={"index":"Trigger","value":"Count"})
-        st.plotly_chart(fig, use_container_width=True)
-
-    st.subheader("Pulling Environment Breakdown")
-    if "pulling_environment" in df:
-        env = df["pulling_environment"].value_counts()
-        fig2 = px.pie(env, names=env.index, values=env.values,
-                      title="Where are you pulling?")
-        st.plotly_chart(fig2, use_container_width=True)
-
-# ─── BINARY FLAGS TAB ─────────────────────────────────────────────────────────
-with tab4:
-    st.subheader("Binary-Flag Tables: Yes Counts")
+    # Top coping strategies
+    st.subheader("Top Coping Strategies")
     conn = sqlite3.connect("database/ttm_database.db")
-    cur = conn.cursor()
-    cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%\\_1\\_yes\\_0\\_no' ESCAPE '\\'")
-    bins = [r[0] for r in cur.fetchall()]
+    cps  = pd.read_sql("SELECT * FROM effective_coping_strategies", conn)
     conn.close()
 
-    for tbl in bins:
-        bdf = df[[c for c in df.columns if c.startswith(tbl.replace("_1_yes_0_no",""))]]
-        yes = bdf.sum().sort_values(ascending=False)
-        fig = px.bar(yes, orientation="h",
-                     title=tbl.replace("_1_yes_0_no","").replace("_"," ").title(),
-                     labels={"index":"Feature","value":"Yes Count"})
-        st.plotly_chart(fig, use_container_width=True)
+    m   = cps.melt("id", [c for c in cps.columns if c!="id"], "strategy", "flag")
+    yes = m.query("flag==1").copy()
+    yes["strategy"] = (
+        yes["strategy"]
+           .str.replace("_"," ")
+           .str.title()
+           .str.strip()
+    )
+    yes = yes[~yes["strategy"].str.match(r"^(None|Unknown)$", case=False)]
+    yes = yes[yes["strategy"]!=""]
 
-# ─── FOOTER ───────────────────────────────────────────────────────────────────
+    if not yes.empty:
+        top5 = yes["strategy"].value_counts().head(5).index.tolist()
+        for strat in top5:
+            st.markdown(f"• {strat}")
+    else:
+        st.info("No coping strategies data available.")
+
+# ─── DAILY LOG ──────────────────────────────────────────────────────────────────
+with tabs[1]:
+    st.subheader("Daily Log")
+    mood   = st.selectbox("Mood", ["Anxious","Stressed","Calm","Happy"])
+    stress = st.slider("Stress Level", 0, 10, 5)
+    urge   = st.slider("Pulling Urges", 0, 10, 3)
+    env    = st.radio("Environment", ["Home","Work","Public","Other"])
+    if st.button("Log Entry"):
+        st.success("✅ Entry saved!")
+
+# ─── COPING TOOLS ───────────────────────────────────────────────────────────────
+with tabs[2]:
+    st.subheader("Coping Tools")
+    st.markdown("**AI-Recommended**")
+    try:
+        recs = top5[:2]
+        c1, c2 = st.columns(2)
+        for col, strat in zip((c1,c2), recs):
+            with col:
+                st.markdown(f"""
+                  <div style="background:#B2DFDB;padding:1rem;border-radius:8px;">
+                    <h4 style="margin:0;">{strat}</h4>
+                  </div>
+                """, unsafe_allow_html=True)
+    except:
+        st.info("No recommendations yet.")
+
+# ─── JOURNAL & PROGRESS ────────────────────────────────────────────────────────
+with tabs[3]:
+    st.subheader("Journal & Progress")
+    sel = st.date_input("Select date", datetime.date.today())
+    st.write(f"Entries on {sel}: **{count}**")
+    st.info("Time-series charts will appear once timestamped entries are stored.")
+
+# ─── CHAT ───────────────────────────────────────────────────────────────────────
+with tabs[4]:
+    st.subheader("Emotion Assistant")
+    msg = st.text_input("How are you feeling?", "")
+    if st.button("Send"):
+        tl = msg.lower()
+        if any(k in tl for k in ["stress","anxious"]):
+            sugg = ["Deep breathing","Short walk","Guided meditation"]
+        elif "sad" in tl:
+            sugg = ["Listen to music","Write in journal"]
+        else:
+            sugg = ["Take a break","Call a friend"]
+        for s in sugg:
+            st.markdown(f"• {s}")
+
+# ─── FOOTER ─────────────────────────────────────────────────────────────────────
 st.markdown(
-    "<hr><p style='text-align:center;color:#555;'>© 2025 TrichMind Research • Data remains anonymous</p>",
+    "<hr style='opacity:0.3;'/>"
+    "<p style='text-align:center;color:#555;'>"
+    "© 2025 TrichMind Research • Data remains anonymous"
+    "</p>",
     unsafe_allow_html=True
 )
